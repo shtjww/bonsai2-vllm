@@ -8,9 +8,9 @@ Bonsai 2 ships only with a custom llama.cpp fork and an MLX pack. This project r
 
 | Metric | Result |
 |---|---|
-| Correctness vs official fork | **98.94% token-level parity** with the fused ternary kernel (fp16 reference path: 99.79%). 8 prompts × 64 tokens, greedy; mean Δlogprob 0.0025 conditional on agreement — float-noise level. Kernel uses split-K atomics → expect small run-to-run jitter. The bs≥16 tensor-core path (v3) adds fp16-MMA batch numerics: in a 16-way greedy check 14/16 outputs were byte-identical to single-stream, 2/16 diverged after ~80% of tokens (batch-dependent numerics, same class as stock vLLM fp16) |
+| Correctness vs official fork | **98.94% token-level parity** with the fused ternary kernel (fp16 reference path: 99.79%). 8 prompts × 64 tokens, greedy; mean Δlogprob 0.0025 conditional on agreement — float-noise level. Kernel uses split-K atomics → expect small run-to-run jitter. The bs≥16 tensor-core path (v3) adds fp16-MMA batch numerics: in a 32-way × 256-token greedy check 25/32 outputs were byte-identical to single-stream; the 7 divergences are deterministic per-prompt and all occur after ~75% of tokens (batch-dependent numerics, same class as stock vLLM fp16) |
 | Single-stream decode | **90.6 tok/s** (RTX PRO 6000 Blackwell) |
-| 16-way concurrent throughput | **762 tok/s — 2.5× the official llama.cpp fork with matched 32 slots** (299 tok/s, same machine); 32-way: **862 tok/s — 2.3× the fork** (373 tok/s) |
+| 16-way concurrent throughput | **759 tok/s — 2.6× the official llama.cpp fork with matched 32 slots** (293 tok/s, same machine); 32-way: **890 tok/s — 2.5× the fork** (355 tok/s) |
 | Weight residency | **5.9 GB packed** (vs 54 GB unfolded fp16) |
 | Quality vs FP8 baseline* | MMLU 85.96 / GSM8K 95.0 / HumanEval 70.0 (342/100/60 questions, same protocol) |
 
@@ -22,16 +22,16 @@ Same machine, same model, same protocol (greedy, 256 tok/req). Aggregate decode 
 
 ![crossover curve](crossover_curve.png)
 
-*(figure generated from the pre-v3 runs; the table below supersedes it)*
-
 | concurrency | vLLM + ternary kernel (v3) | official fork (`-np 32`, 32 slots) | official fork (default config, 4 slots) | verdict vs best fork |
 |---|---|---|---|---|
 | 1 | 89.2 | **102.0** | 99.3 | fork +14% |
 | 8 | **204.4** | 184.7 | 152.6 | **vLLM +11%** |
-| 16 | **761.9** | 299.4 | 153.6 | **vLLM +154%** |
-| 32 | **862.4** | 372.8 | 154.7 | **vLLM +131%** |
+| 16 | **759.3** | 292.8 | 153.6 | **vLLM +159%** |
+| 32 | **889.7** | 355.3 | 154.7 | **vLLM +150%** |
 
 **How the tables turned at bs≥16.** The fork's default server config (`llama-server` without `-np` → 4 parallel slots, how the official demo launches it) saturates at ~155 tok/s past bs=8. Given matched slots (`-np 32 -c 65536`), the fork's batched ternary GEMM scales well and originally beat our v1 kernel (299/373 vs 226/234 at bs=16/32). The v3 kernel (2026-10-01) moved the fused trit-decode matmul onto **tensor cores** (`tl.dot` over a (128, BLOCK_OUT) fp16 weight tile decoded in-kernel, CUDA-core decode overlapped with MMA) — turning a bandwidth fight into a compute fight the GPU is built for. The fork's GEMV is still better at bs=1; every concurrency point ≥8 is now vLLM's.
+
+Numbers above are the back-to-back verification run (2026-10-01); an earlier same-day run gave vLLM 761.9/862.4 and fork 299.4/372.8 — run-to-run spread ≤3% on our side, ≤5% on the fork's (one degraded fork-server outlier at bs=32 was excluded and is documented in `BENCH_20261001.md`).
 
 **What didn't work (full writeup: `BENCH_20261001.md`):** a BLOCK_T batched kernel that cut weight DRAM traffic by 16× won +44% in micro-bench but *lost* end-to-end (126 vs 226 tok/s @bs=16) — v1's concurrent token programs already hit L2 at ~1.6 TB/s effective, and the batched kernel was compute-bound without tensor cores. The fork's 373 tok/s @bs=32 ≈ 3.1 TB/s equivalent confirmed only a tensor-core path could beat it. v3's 862 tok/s ≈ 7.2 TB/s equivalent.
 

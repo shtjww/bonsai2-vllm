@@ -163,3 +163,14 @@ deploy/       remote.py(paramiko驱动) / server_bootstrap / fork_setup / poll /
 - llama.cpp vs vLLM qkv打包顺序暗坑
 - AutoDL API的坑：公共镜像无API、pypi限速、turbo双刃剑、GET+JSON body
 - 下载器的坑：xet协议国内死、签名URL过期、双实例撞车、线程异常不传播
+
+---
+
+## 2026-10-01 补录：发布前审查 → v1 落败认账 → v2 负结果 → v3 反杀
+
+- 发布前"敌意审稿"自查出两类问题：(a) deploy 脚本硬编码实例 SSH 明文密码（已清并重写 git 历史）；(b) 全部并发对照里 fork 为默认 4 槽配置，"反超 51%"系排队假象。
+- fork 满血（-np 32 -c 65536）重测：bs=8/16/32 = 184.7/299.4/372.8。v1 在 bs≥16 落败（226.0/233.9），如实改 README 双配置口径。
+- v2（BLOCK_T 批量，减权重流量 16×）：微观 +44% 系 L2 幻觉（同张量循环），端到端 bs=16 崩盘（126.0 vs 226.0）。负结果封存，BONSAI_KERNEL_V2=1 可复现。
+- v3（tensor core）：索引向量化解包 (128,BO) fp16 tile + tl.dot MMA，BT=16/BO=64/SK=8/NW=4/NS=1（BO>64 SMEM 爆）。微观 4.9×/8.0×；端到端验证轮 bs=16 759.3 / bs=32 889.7 = 2.5~2.6× 满血 fork，两轮复现 ≤3% 方差。
+- 正确性：32 并发×256tok 对拍 25/32 逐字一致，7 个发散均为确定性后段 fp16 舍入。T=1 路径未动，98.94% parity 结论不变。
+- 全天实验细节：BENCH_20261001.md。

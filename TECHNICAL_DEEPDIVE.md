@@ -454,6 +454,21 @@ vLLM 快的原因是 torch.compile + CUDA Graph：把每层的几百次 kernel �
 
 生产环境全是并发，所以反超发生在真实场景。
 
+### 9.7 v3：tensor core 之路（2026-10-01）
+
+fork 满血（`-np 32`）后 v1 在 bs≥16 落败。反推 fork 的 373 tok/s @bs=32 ≈ 3.1TB/s 等效带宽——超过 DRAM 峰值两倍多，证明它的 batch GEMM 打在 tensor core 上。要赢只有同样上 tensor core。
+
+**v3 kernel 设计**（`ptq1_gemm_v3_kernel`，T≥16 默认启用）：
+
+1. **索引向量化解包**：128 个权重位置的 (word_idx, byte_idx, 3ⁿ) 三个索引向量预先算好；每个 block 一次 gather 取出 (128, BLOCK_OUT) 的 word 矩阵，移位/掩码/查表得到 fp16 权重 tile——全部在 CUDA core 上向量化完成。
+2. **tl.dot MMA**：x tile（BLOCK_T=16, 128）转 fp16 后与权重 tile 做 `tl.dot`，走 tensor core；每个 block 的 fp16 scale 在块末乘回。
+3. **双单元流水**：解包（CUDA core）与矩阵乘（tensor core）在不同硬件单元上，天然 overlap。
+4. 配置：BT=16 / BO=64 / SK=8 / num_warps=4 / num_stages=1（BO 再大 shared memory 会爆，101KB 上限）。
+
+**战绩**（8 层轮换 L2-busting 微观 + 端到端背靠背双重验证）：微观 4.9×/8.0×（T=16/32），端到端 bs=16 759.3、bs=32 889.7 tok/s，2.5~2.6 倍于满血 fork。数值：rel_err 1.8e-4（x 转 fp16），32 并发对拍 25/32 与单流逐字一致，发散均为确定性后段舍入。
+
+**沿途负结果**（同样重要）：v2 BLOCK_T 减流量路线——微观 +44% 是 L2 幻觉，端到端 -44%，已封存（`BONSAI_KERNEL_V2=1` 可复现）。完整实验日志见 BENCH_20261001.md。
+
 ## 10. 压测方法学（数字为什么可信）
 
 - 同口径：greedy（temperature=0 无随机）、固定 prompt 集、固定 256 token
@@ -489,11 +504,11 @@ D:\2026年工作\bonsai2-vllm\
 ├── PROGRESS.md             全程日志（bug 根因链 + 调参数据）
 ├── TECHNICAL_DEEPDIVE.md   本文档（从零讲起版）
 ├── BLOG.md                 对外博客版
-├── PR_SUMMARY.md           对内 PR 汇报版
-├── RESUME.md               简历素材
-├── RESTART.md              服务器开关机备忘
+├── BENCH_20261001.md       v3 实验日志（含 v2 负结果与复现验证）
+├── EVAL_QUALITY_20260928.md 质量评测方法学
+├── deploy/                 fork 环境 / 压测 / kernel bench / 正确性对拍脚本
 ├── src/                    GGUF 解析 / 反量化 / Hadamard / 名称映射
-├── vllm_bonsai/            loader / kernel / 自定义层 / 模块替换 / dump 探针
+├── vllm_bonsai/            loader / kernel(v1+v2+v3) / 自定义层 / 模块替换 / dump 探针
 ├── reference/              官方 config/tokenizer（名称对照来源）
 ├── fork-llama.cpp/         官方 fork 源码（逆向依据）
 └── models/                 本地 GGUF 权重
