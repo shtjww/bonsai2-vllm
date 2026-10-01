@@ -1,0 +1,12 @@
+# Core serving stack — see README quickstart for full environment notes
+# (Python 3.12, torch 2.11, vLLM 0.26, transformers 5.17)
+vllm==0.26.0
+
+# src/ GGUF reader & dequant utilities
+numpy
+
+# src/compare_logits.py parity check
+requests
+
+# deploy/ remote helpers (optional, only for AutoDL-style workflows)
+paramiko

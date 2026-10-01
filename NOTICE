@@ -1,0 +1,19 @@
+NOTICE
+======
+
+bonsai2-vllm — vLLM port for PrismML Ternary Bonsai 2 27B
+
+This product includes software developed by the bonsai2-vllm authors.
+
+Model weights are NOT included in this repository. They are distributed
+separately by PrismML under the Apache License 2.0:
+  https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf
+
+Weight-format facts (PTQ1_0 / PQ2_0 packing, Hadamard rotation basis) were
+reverse-engineered from PrismML-Eng/llama.cpp:
+  https://github.com/PrismML-Eng/llama.cpp
+
+Base model: Qwen3.8-27B (Apache License 2.0), Alibaba Qwen team.
+
+"Ternary Bonsai" and "PrismML" are trademarks of their respective owners;
+this is an independent community project, not affiliated with PrismML.

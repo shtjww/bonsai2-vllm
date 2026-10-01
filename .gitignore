@@ -1,0 +1,27 @@
+# Weights & large binaries
+models/
+reference/
+*.gguf
+*.safetensors
+*.pt
+*.bin
+
+# Third-party checkouts (get your own copies)
+Bonsai-demo/
+fork-llama.cpp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs, dumps, office docs
+*.log
+*.docx
+dump*/
+compare_result.json
+
+# OS
+.DS_Store
+Thumbs.db
