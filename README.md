@@ -8,9 +8,9 @@ Bonsai 2 ships only with a custom llama.cpp fork and an MLX pack. This project r
 
 | Metric | Result |
 |---|---|
-| Correctness vs official fork | **98.94% token-level parity** with the fused ternary kernel (fp16 reference path: 99.79%). 8 prompts × 64 tokens, greedy; mean Δlogprob 0.0025 conditional on agreement — float-noise level. Kernel uses split-K atomics → expect small run-to-run jitter |
+| Correctness vs official fork | **98.94% token-level parity** with the fused ternary kernel (fp16 reference path: 99.79%). 8 prompts × 64 tokens, greedy; mean Δlogprob 0.0025 conditional on agreement — float-noise level. Kernel uses split-K atomics → expect small run-to-run jitter. The bs≥16 tensor-core path (v3) adds fp16-MMA batch numerics: in a 16-way greedy check 14/16 outputs were byte-identical to single-stream, 2/16 diverged after ~80% of tokens (batch-dependent numerics, same class as stock vLLM fp16) |
 | Single-stream decode | **90.6 tok/s** (RTX PRO 6000 Blackwell) |
-| 8-way concurrent throughput | **204 tok/s — 34% faster than the official llama.cpp fork** (153 tok/s, same machine, fork at default server config*) |
+| 16-way concurrent throughput | **762 tok/s — 2.5× the official llama.cpp fork with matched 32 slots** (299 tok/s, same machine); 32-way: **862 tok/s — 2.3× the fork** (373 tok/s) |
 | Weight residency | **5.9 GB packed** (vs 54 GB unfolded fp16) |
 | Quality vs FP8 baseline* | MMLU 85.96 / GSM8K 95.0 / HumanEval 70.0 (342/100/60 questions, same protocol) |
 
@@ -18,20 +18,22 @@ Bonsai 2 ships only with a custom llama.cpp fork and an MLX pack. This project r
 
 ## Batch scaling: the crossover curve
 
-Same machine, same model, same protocol (greedy, 256 tok/req). Aggregate decode throughput:
+Same machine, same model, same protocol (greedy, 256 tok/req). Aggregate decode throughput (vLLM column: 2026-10-01 with the v3 tensor-core kernel; fork columns measured same day):
 
 ![crossover curve](crossover_curve.png)
 
-| concurrency | vLLM + ternary kernel | official fork | delta |
-|---|---|---|---|
-| 1 | 89.1 | **99.3** | −10% |
-| 2 | 124.9 | **128.6** | −3% |
-| **4** | **161.9** | **161.5** | **crossover** |
-| 8 | **204.1** | 152.6 | **+34%** |
-| 16 | **226.0** | 153.6 | **+47%** |
-| 32 | **233.3** | 154.7 | **+51%** |
+*(figure generated from the pre-v3 runs; the table below supersedes it)*
 
-The fork numbers above were measured with the fork server's **default configuration** (`llama-server` without `-np`, i.e. 4 parallel slots), which is how the official demo instructs users to launch it; past bs=8 its 4 slots saturate at ~155 tok/s while queued requests wait. vLLM continuous batching keeps amortizing the weight read across N requests. A re-run of the fork with `-np 32` (matched slot count) is planned and will be posted here — the bs=1 picture (fork's GEMV wins, crossover at bs≈4) is config-independent.
+| concurrency | vLLM + ternary kernel (v3) | official fork (`-np 32`, 32 slots) | official fork (default config, 4 slots) | verdict vs best fork |
+|---|---|---|---|---|
+| 1 | 89.2 | **102.0** | 99.3 | fork +14% |
+| 8 | **204.4** | 184.7 | 152.6 | **vLLM +11%** |
+| 16 | **761.9** | 299.4 | 153.6 | **vLLM +154%** |
+| 32 | **862.4** | 372.8 | 154.7 | **vLLM +131%** |
+
+**How the tables turned at bs≥16.** The fork's default server config (`llama-server` without `-np` → 4 parallel slots, how the official demo launches it) saturates at ~155 tok/s past bs=8. Given matched slots (`-np 32 -c 65536`), the fork's batched ternary GEMM scales well and originally beat our v1 kernel (299/373 vs 226/234 at bs=16/32). The v3 kernel (2026-10-01) moved the fused trit-decode matmul onto **tensor cores** (`tl.dot` over a (128, BLOCK_OUT) fp16 weight tile decoded in-kernel, CUDA-core decode overlapped with MMA) — turning a bandwidth fight into a compute fight the GPU is built for. The fork's GEMV is still better at bs=1; every concurrency point ≥8 is now vLLM's.
+
+**What didn't work (full writeup: `BENCH_20261001.md`):** a BLOCK_T batched kernel that cut weight DRAM traffic by 16× won +44% in micro-bench but *lost* end-to-end (126 vs 226 tok/s @bs=16) — v1's concurrent token programs already hit L2 at ~1.6 TB/s effective, and the batched kernel was compute-bound without tensor cores. The fork's 373 tok/s @bs=32 ≈ 3.1 TB/s equivalent confirmed only a tensor-core path could beat it. v3's 862 tok/s ≈ 7.2 TB/s equivalent.
 
 ## How it works
 
